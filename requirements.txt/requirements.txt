@@ -1,6 +1,5 @@
 streamlit
 pandas
 joblib
-altair
+lightgbm
 scikit-learn==1.7.2
-statsmodels
