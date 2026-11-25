@@ -1,4 +1,8 @@
-﻿https://kdt-gitlab.elice.io/aba_track/class_04/aba4_project1/team2/jhk-project1
+﻿깃랩 저장소 링크
+https://kdt-gitlab.elice.io/aba_track/class_04/aba4_project1/team2/jhk-project1
+
+당뇨 건강지표 기반 위험도 예측 및 대시보드 링크
+https://jhk-project1-fw3nxuzab3usne5bnurjtw.streamlit.app/
 
 # 당뇨 건강지표 기반 위험도 예측 및 대시보드
 
@@ -77,5 +81,6 @@
   * `models/lgbm_diabetes_model.joblib`: `data/processed/` 전처리 데이터와 상호작용 파생변수를 기반으로 학습한 최종 LightGBM 모델 번들(피처 목록 및 임계값 포함).
 
   * `app.py`: 핵심 건강·대사·생활습관 11개 입력 위젯을 통해 예상 당뇨 위험 확률과 운영 구간(일반 관찰 / 1차 스크리닝 `≥ 0.42` / 정밀 타겟팅 `≥ 0.65`)을 안내하는 Streamlit 대시보드.
+
 
 
