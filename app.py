@@ -5,6 +5,29 @@ import streamlit as st
 
 st.set_page_config(page_title="당뇨 건강지표 예측 대시보드", layout="wide")
 
+GENHLTH_OPTIONS = {
+    1: ("1점 — 최상 (Excellent)", "평소 컨디션이 매우 좋고 건강 상태가 최상인 경우"),
+    2: ("2점 — 매우 좋음 (Very Good)", "전반적으로 건강 상태가 매우 양호한 경우"),
+    3: ("3점 — 좋음 (Good)", "무난하게 좋은 편이나, 이 점수대부터 위험 구간(≥ 3) 진입"),
+    4: ("4점 — 보통 (Fair)", "건강이 보통 수준이며 관리가 필요한 구간"),
+    5: ("5점 — 나쁨 (Poor)", "건강 상태가 나쁘다고 느끼며 주의가 필요한 구간"),
+}
+
+HABIT_GUIDES = {
+    "PhysActivity": (
+        "신체 활동 (PhysActivity)",
+        "지난 30일 동안 직장 업무 외 일상에서 걷기·운동 등 신체 활동을 했는지 여부입니다 (`1` = 예, `0` = 아니오). 미실시(`0`) 시 불건강 생활습관 점수에 1점이 더해집니다.",
+    ),
+    "Fruits": (
+        "과일 섭취 (Fruits)",
+        "과일을 하루 평균 1회 이상 섭취하는지 여부입니다 (`1` = 예, `0` = 아니오). 섭취하지 않음(`0`) 시 식습관 보완 요소로 반영됩니다.",
+    ),
+    "Veggies": (
+        "채소 섭취 (Veggies)",
+        "채소를 하루 평균 1회 이상 섭취하는지 여부입니다 (`1` = 예, `0` = 아니오). 섭취하지 않음(`0`) 시 식습관 보완 요소로 반영됩니다.",
+    ),
+}
+
 
 def age_to_brfss_code(real_age: int) -> int:
     """만 나이(세)를 BRFSS 기준 연령 코드(1~13)로 변환"""
@@ -34,6 +57,20 @@ def age_to_brfss_code(real_age: int) -> int:
         return 12
     else:
         return 13
+
+
+def classify_bmi_who(bmi_val: float) -> str:
+    """WHO 기준 BMI 구간 명칭 반환"""
+    if bmi_val < 18.5:
+        return "저체중 (< 18.5)"
+    elif bmi_val < 25.0:
+        return "정상 (18.5 ~ 24.9)"
+    elif bmi_val < 30.0:
+        return "과체중 (25.0 ~ 29.9)"
+    elif bmi_val < 35.0:
+        return "비만 (30.0 ~ 34.9)"
+    else:
+        return "고도비만 (≥ 35.0)"
 
 
 def add_interaction_features(data: pd.DataFrame) -> pd.DataFrame:
@@ -122,18 +159,18 @@ def summarize_risk_factors(raw_input: dict, real_age: int) -> tuple[list[str], l
         factors.append("보행 어려움 (DiffWalk = 1)")
         tips.append("관절·보행 부담을 줄인 안전한 신체 활동 선택")
     if raw_input["PhysActivity"] == 0:
-        factors.append("신체 활동 부족 (PhysActivity = 0)")
+        factors.append("신체 활동 부족 (PhysActivity = 0, 지난 30일 일상 활동 없음)")
         tips.append("주 150분 내외 가벼운 걷기 등 규칙적 활동 습관화")
     if raw_input["Smoker"] == 1:
         factors.append("흡연 중 (Smoker = 1)")
         tips.append("금연 실천 및 금연 지원 프로그램 활용")
     if raw_input["Fruits"] == 0:
-        factors.append("과일 섭취 부족 (Fruits = 0)")
+        factors.append("과일 섭취 부족 (Fruits = 0, 하루 1회 미만 섭취)")
     if raw_input["Veggies"] == 0:
-        factors.append("채소 섭취 부족 (Veggies = 0)")
+        factors.append("채소 섭취 부족 (Veggies = 0, 하루 1회 미만 섭취)")
 
-    if (raw_input["Fruits"] == 0 or raw_input["Veggies"] == 0):
-        tips.append("식이섬유가 풍부한 채소·과일 섭취 늘리기")
+    if raw_input["Fruits"] == 0 or raw_input["Veggies"] == 0:
+        tips.append("하루 1회 이상 채소·과일 섭취 습관 만들기")
 
     metabolic_score = (
         int(raw_input["HighBP"] == 1)
@@ -147,9 +184,25 @@ def summarize_risk_factors(raw_input: dict, real_age: int) -> tuple[list[str], l
         + int(raw_input["Veggies"] == 0)
     )
 
-    # 중복 제거 순서 유지
     unique_tips = list(dict.fromkeys(tips))
     return factors, unique_tips, metabolic_score, lifestyle_score
+
+
+def resolve_feature_columns(bundle, model) -> list[str] | None:
+    if isinstance(bundle, dict):
+        for key in ("feature_columns", "feature_names", "features", "columns"):
+            cols = bundle.get(key)
+            if cols:
+                return list(cols)
+    if hasattr(model, "feature_name_") and model.feature_name_:
+        return list(model.feature_name_)
+    if hasattr(model, "feature_names_in_") and getattr(model, "feature_names_in_") is not None:
+        return list(model.feature_names_in_)
+    if hasattr(model, "booster_"):
+        names = model.booster_.feature_name()
+        if names:
+            return list(names)
+    return None
 
 
 @st.cache_resource
@@ -168,26 +221,80 @@ real_age = st.sidebar.number_input("만 나이 (세)", min_value=18, max_value=1
 age_code = age_to_brfss_code(int(real_age))
 st.sidebar.caption(f"자동 변환된 연령 코드 (Age): **{age_code}** / 13")
 
-gen_hlth = st.sidebar.slider("일반 건강 상태 (GenHlth, 1=매우좋음 ~ 5=매우나쁨)", 1, 5, 3)
+gen_hlth = st.sidebar.selectbox(
+    "일반 건강 상태 (GenHlth)",
+    options=[1, 2, 3, 4, 5],
+    index=2,  # 기본값 3점
+    format_func=lambda x: GENHLTH_OPTIONS[x][0],
+    help="1점(최상)부터 5점(나쁨)까지 선택할 수 있습니다.",
+)
+_, gen_hlth_desc = GENHLTH_OPTIONS[gen_hlth]
+st.sidebar.caption(f"**선택 기준:** {gen_hlth_desc}")
+if gen_hlth >= 3:
+    st.sidebar.info("`GenHlth ≥ 3` 구간입니다. 점수가 높을수록 당뇨 위험도가 높아지는 경향이 있습니다.")
+else:
+    st.sidebar.caption("`GenHlth < 3` 구간입니다.")
+with st.sidebar.expander("1~5점 기준 설명 보기"):
+    for score in range(1, 6):
+        label, desc = GENHLTH_OPTIONS[score]
+        st.markdown(f"- **{label}:** {desc}")
+
 high_bp = st.sidebar.selectbox("고혈압 여부 (HighBP)", options=[0, 1], format_func=lambda x: "예 (1)" if x == 1 else "아니오 (0)")
 high_chol = st.sidebar.selectbox("고콜레스테롤 여부 (HighChol)", options=[0, 1], format_func=lambda x: "예 (1)" if x == 1 else "아니오 (0)")
-bmi = st.sidebar.number_input("BMI", min_value=12.0, max_value=60.0, value=28.0, step=0.5)
+
+st.sidebar.markdown("**BMI 자동 계산 (키 · 몸무게 입력)**")
+height_cm = st.sidebar.number_input("키 (cm)", min_value=120.0, max_value=230.0, value=170.0, step=0.5)
+weight_kg = st.sidebar.number_input("몸무게 (kg)", min_value=30.0, max_value=250.0, value=81.0, step=0.5)
+raw_bmi = round(weight_kg / ((height_cm / 100.0) ** 2), 1)
+bmi = float(min(max(raw_bmi, 12.0), 60.0))
+bmi_who_label = classify_bmi_who(bmi)
+st.sidebar.caption(f"자동 계산된 BMI: **{bmi:.1f}** · **{bmi_who_label}**")
+
 diff_walk = st.sidebar.selectbox("보행 어려움 (DiffWalk)", options=[0, 1], format_func=lambda x: "예 (1)" if x == 1 else "아니오 (0)")
 heart_disease = st.sidebar.selectbox("심혈관 질환 (HeartDiseaseorAttack)", options=[0, 1], format_func=lambda x: "예 (1)" if x == 1 else "아니오 (0)")
-phys_activity = st.sidebar.selectbox("신체 활동 (PhysActivity)", options=[0, 1], format_func=lambda x: "예 (1)" if x == 1 else "아니오 (0)")
+
+phys_activity = st.sidebar.selectbox(
+    "신체 활동 (PhysActivity)",
+    options=[0, 1],
+    index=1,
+    format_func=lambda x: "예 (1: 활동 있음)" if x == 1 else "아니오 (0: 활동 없음)",
+    help="지난 30일간 직장 외 일상에서 걷기·운동 등 신체 활동을 했는지 여부입니다.",
+)
+st.sidebar.caption("• **신체 활동(PhysActivity):** 지난 30일 일상 운동·활동 여부 (`1`=예, `0`=아니오)")
+
 smoker = st.sidebar.selectbox("흡연 여부 (Smoker)", options=[0, 1], format_func=lambda x: "예 (1)" if x == 1 else "아니오 (0)")
-fruits = st.sidebar.selectbox("과일 섭취 (Fruits)", options=[0, 1], format_func=lambda x: "예 (1)" if x == 1 else "아니오 (0)")
-veggies = st.sidebar.selectbox("채소 섭취 (Veggies)", options=[0, 1], format_func=lambda x: "예 (1)" if x == 1 else "아니오 (0)")
+
+fruits = st.sidebar.selectbox(
+    "과일 섭취 (Fruits)",
+    options=[0, 1],
+    index=1,
+    format_func=lambda x: "예 (1: 하루 1회 이상)" if x == 1 else "아니오 (0: 하루 1회 미만)",
+    help="과일을 하루 평균 1회 이상 섭취하는지 여부입니다.",
+)
+st.sidebar.caption("• **과일 섭취(Fruits):** 하루 평균 1회 이상 과일 섭취 여부 (`1`=예, `0`=아니오)")
+
+veggies = st.sidebar.selectbox(
+    "채소 섭취 (Veggies)",
+    options=[0, 1],
+    index=1,
+    format_func=lambda x: "예 (1: 하루 1회 이상)" if x == 1 else "아니오 (0: 하루 1회 미만)",
+    help="채소를 하루 평균 1회 이상 섭취하는지 여부입니다.",
+)
+st.sidebar.caption("• **채소 섭취(Veggies):** 하루 평균 1회 이상 채소 섭취 여부 (`1`=예, `0`=아니오)")
 
 if not model_file.exists():
     st.warning(f"모델 파일이 아직 없습니다: `{model_file}`")
     st.stop()
 
 bundle = load_model_bundle(str(model_file))
-model = bundle["model"]
-feature_columns = bundle["feature_columns"]
-raw_columns = bundle.get("raw_columns", [])
-thresholds = bundle.get("thresholds", {"screening": 0.42, "baseline": 0.50, "targeting": 0.65})
+model = bundle["model"] if isinstance(bundle, dict) and "model" in bundle else bundle
+feature_columns = resolve_feature_columns(bundle, model)
+raw_columns = bundle.get("raw_columns", []) if isinstance(bundle, dict) else []
+thresholds = (
+    bundle.get("thresholds", {"screening": 0.42, "baseline": 0.50, "targeting": 0.65})
+    if isinstance(bundle, dict)
+    else {"screening": 0.42, "baseline": 0.50, "targeting": 0.65}
+)
 
 raw_input = {
     "HighBP": high_bp,
@@ -206,7 +313,11 @@ raw_input = {
 full_raw = {col: raw_input.get(col, 0) for col in raw_columns} if raw_columns else raw_input
 raw_df = pd.DataFrame([full_raw])
 fe_df = add_interaction_features(raw_df)
-X_infer = fe_df.reindex(columns=feature_columns, fill_value=0)
+
+if feature_columns:
+    X_infer = fe_df.reindex(columns=feature_columns, fill_value=0)
+else:
+    X_infer = fe_df
 
 prob = float(model.predict_proba(X_infer)[0][1])
 prob_pct = prob * 100.0
@@ -229,7 +340,10 @@ col3.metric(
 # 위험도 게이지(진행바 + 구간 표시)
 st.subheader("위험도 게이지 및 운영 구간")
 progress_val = min(max(prob, 0.0), 1.0)
-st.progress(progress_val, text=f"현재 예측 위험도: {prob_pct:.1f}% (1차 스크리닝 기준 {th_screen*100:.0f}% / 정밀 타겟팅 기준 {th_target*100:.0f}%)")
+st.progress(
+    progress_val,
+    text=f"현재 예측 위험도: {prob_pct:.1f}% (1차 스크리닝 기준 {th_screen*100:.0f}% / 정밀 타겟팅 기준 {th_target*100:.0f}%)",
+)
 
 if prob >= th_target:
     st.error(f"현재 구간: **정밀 타겟팅 구간 (≥ {th_target:.2f})** — 오탐을 줄이고 집중 개입이 필요한 고위험군입니다.")
@@ -266,6 +380,15 @@ with detail_col2:
         else:
             st.markdown("- 현재 건강 습관과 지표를 꾸준히 유지해 보세요.")
 
+# 생활습관 지표(신체활동·과일·채소) 및 BMI 의미 안내
+with st.expander("신체 활동 · 과일 섭취 · 채소 섭취 및 BMI 의미 보기"):
+    st.markdown(
+        f"- **체질량지수 (BMI):** 키(`{height_cm:.1f} cm`)와 몸무게(`{weight_kg:.1f} kg`)로부터 자동 계산된 값(**`{bmi:.1f}`**, **{bmi_who_label}**)입니다. "
+        "연속형 수치로 모델에 들어가며, `30.0` 이상은 비만 구간으로 분류됩니다."
+    )
+    for _, (title, desc) in HABIT_GUIDES.items():
+        st.markdown(f"- **{title}:** {desc}")
+
 # 운영 기준선(0.42, 0.65) 설명 카드
 st.subheader("운영 임계값 기준선 안내")
 guide_col1, guide_col2 = st.columns(2)
@@ -284,11 +407,18 @@ with guide_col2:
         st.markdown("- **테스트셋 참고:** 약 **22.6%** 선별, **Precision 0.3818 / F1 0.4724** 수준")
         st.markdown("- **활용:** 자원이 제한된 심화 상담·집중 관리 대상 선정")
 
-st.subheader("입력 지표 요약 (만 나이 및 변환 연령 코드 포함)")
-summary_df = pd.DataFrame([{"Age_Years": int(real_age), **raw_input}])
+st.subheader("입력 지표 요약 (만 나이 · 키/몸무게/BMI · 변환 연령 코드 포함)")
+summary_df = pd.DataFrame([
+    {
+        "Age_Years": int(real_age),
+        "Height_cm": float(height_cm),
+        "Weight_kg": float(weight_kg),
+        **raw_input,
+    }
+])
 st.dataframe(summary_df, width="stretch")
 
-if hasattr(model, "feature_importances_"):
+if hasattr(model, "feature_importances_") and feature_columns and len(feature_columns) == len(model.feature_importances_):
     st.subheader("모델 주요 변수 중요도 (Top 10)")
     imp_df = (
         pd.DataFrame({
